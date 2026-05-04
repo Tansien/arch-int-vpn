@@ -45,7 +45,7 @@ refresh.sh
 ####
 
 # define pacman packages
-pacman_packages="base-devel rust kmod openvpn privoxy ipcalc wireguard-tools openresolv libnatpmp ldns"
+pacman_packages="base-devel rust kmod openvpn privoxy ipcalc wireguard-tools libnatpmp ldns"
 
 # install pre-reqs
 pacman -S --needed $pacman_packages --noconfirm
