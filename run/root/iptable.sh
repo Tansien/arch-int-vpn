@@ -90,9 +90,15 @@ if [[ "${DEBUG}" == "true" ]]; then
 	echo "[debug] Modules currently loaded for kernel" ; lsmod
 fi
 
-# check we have iptable_mangle, if so setup fwmark
-lsmod | grep iptable_mangle
-iptable_mangle_exit_code="${?}"
+# Probe whether the mangle table is usable. Works regardless of which
+# backend was selected by iptable-init.sh: under the legacy backend it
+# requires the iptable_mangle kernel module; under the nftables backend
+# mangle is provided natively by nf_tables and the probe still succeeds.
+if iptables -t mangle -L &>/dev/null; then
+	iptable_mangle_exit_code=0
+else
+	iptable_mangle_exit_code=1
+fi
 
 if [[ "${iptable_mangle_exit_code}" == 0 ]]; then
 
