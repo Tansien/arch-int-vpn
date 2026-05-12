@@ -164,8 +164,14 @@ else
 
 	fi
 
-	# check if we have iptable_mangle module available
-	check_mangle_available=$(lsmod | grep iptable_mangle)
+	# Functional probe: works on legacy (with iptable_mangle loaded) and on
+	# nft (mangle provided natively by nf_tables). Avoids misleading modprobe
+	# warnings on nft hosts where the legacy module is absent by design.
+	if iptables -t mangle -L &>/dev/null; then
+		check_mangle_available="yes"
+	else
+		check_mangle_available=""
+	fi
 
 	# if mangle module not available then try installing it
 	if [[ -z "${check_mangle_available}" ]]; then

@@ -4,9 +4,9 @@ function select_iptables_backend() {
 
 	local backend=""
 
-	# Probe nftables first (the modern default, required on hosts that no
-	# longer auto-load the legacy ip_tables kernel module — e.g. stock
-	# Arch on kernel 6.19+).
+	# Probe nftables first (the modern default, required on hosts where
+	# the legacy ip_tables module is no longer loaded by default - e.g.
+	# current Arch, which ships iptables-nft as the iptables provider).
 	if iptables-nft -n -L &>/dev/null; then
 		backend="nft"
 	elif iptables-legacy -n -L &>/dev/null; then
