@@ -1,5 +1,37 @@
 #!/bin/bash
 
+function select_iptables_backend() {
+
+	local backend=""
+
+	# Probe nftables first (the modern default, required on hosts where
+	# the legacy ip_tables module is no longer loaded by default - e.g.
+	# current Arch, which ships iptables-nft as the iptables provider).
+	if iptables-nft -n -L &>/dev/null; then
+		backend="nft"
+	elif iptables-legacy -n -L &>/dev/null; then
+		backend="legacy"
+	fi
+
+	if [[ -z "${backend}" ]]; then
+		echo "[crit] Neither iptables backend works on this host." | ts '%Y-%m-%d %H:%M:%.S'
+		echo "[crit] Required kernel modules unavailable: nf_tables (preferred) or ip_tables." | ts '%Y-%m-%d %H:%M:%.S'
+		echo "[crit] On a modern host: try 'sudo modprobe nf_tables' on the docker host." | ts '%Y-%m-%d %H:%M:%.S'
+		echo "[crit] On an older host: try 'sudo modprobe ip_tables' on the docker host." | ts '%Y-%m-%d %H:%M:%.S'
+		exit 1
+	fi
+
+	echo "[info] iptables backend selected: ${backend}" | ts '%Y-%m-%d %H:%M:%.S'
+
+	# Point the default iptables/ip6tables commands at the chosen backend.
+	# A single symlink swap covers every downstream script without touching
+	# any of the existing call sites.
+	for cmd in iptables iptables-save iptables-restore \
+	           ip6tables ip6tables-save ip6tables-restore; do
+		ln -sf "xtables-${backend}-multi" "/usr/bin/${cmd}"
+	done
+}
+
 function accept_vpn_endpoints() {
 
 	local direction="${1}"
@@ -152,6 +184,9 @@ function add_name_servers() {
 }
 
 function main() {
+
+	# choose iptables backend before any rule operations
+	select_iptables_backend
 
 	# drop all for ipv4
 	drop_all_ipv4
