@@ -1,0 +1,6 @@
+FROM binhex/arch-qbittorrentvpn:latest
+
+LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
+
+COPY run/local/tools.sh /usr/local/bin/tools.sh
+RUN chmod +x /usr/local/bin/tools.sh
