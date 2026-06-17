@@ -387,6 +387,7 @@ function check_incoming_port_webscrape() {
 
 	EXTERNAL_SITE_UP="false"
 	INCOMING_PORT_OPEN="false"
+	INCOMING_PORT_CLOSED="false"
 
 	if [[ "${DEBUG}" == "true" ]]; then
 		echo "[debug] Checking ${APPLICATION} incoming port '${!application_incoming_port}' is open, using external url '${incoming_port_check_url}'..."
@@ -407,8 +408,9 @@ function check_incoming_port_webscrape() {
 		# if port is not open then check we have a match for closed, if no match then suspect web scrape issue
 		if curl --connect-timeout 30 --max-time 120 --silent --data "${post_data}" -X POST "${incoming_port_check_url}" | grep -i -P "${regex_closed}" 1> /dev/null; then
 
-			echo "[info] ${APPLICATION} incoming port closed, marking for reconfigure"
+			echo "[info] ${APPLICATION} incoming port reported closed"
 			EXTERNAL_SITE_UP="true"
+			INCOMING_PORT_CLOSED="true"
 			return
 
 		else
@@ -430,6 +432,7 @@ function check_incoming_port_json() {
 
 	EXTERNAL_SITE_UP="false"
 	INCOMING_PORT_OPEN="false"
+	INCOMING_PORT_CLOSED="false"
 
 	if [[ "${DEBUG}" == "true" ]]; then
 		echo "[debug] Checking ${APPLICATION} incoming port '${!application_incoming_port}' is open, using external url '${incoming_port_check_url}'..."
@@ -448,8 +451,9 @@ function check_incoming_port_json() {
 
 	elif [[ "${response}" == "false" ]]; then
 
-		echo "[info] ${APPLICATION} incoming port '${!application_incoming_port}' is closed, marking for reconfigure"
+		echo "[info] ${APPLICATION} incoming port '${!application_incoming_port}' is reported closed"
 		EXTERNAL_SITE_UP="true"
+		INCOMING_PORT_CLOSED="true"
 		return
 
 	else
@@ -466,6 +470,9 @@ function check_incoming_port() {
 
 	# variable used below with bash indirect expansion
 	application_incoming_port="${APPLICATION}_port"
+	failed_port_check_count_file="/tmp/portclosedcount"
+	failed_port_check_count=0
+	failed_port_check_limit=2
 
 	if [[ -z "${!application_incoming_port}" ]]; then
 		echo "[warn] ${APPLICATION} incoming port is not defined" ; return 1
@@ -478,16 +485,46 @@ function check_incoming_port() {
 	# run function for first site (web scrape)
 	check_incoming_port_webscrape "https://canyouseeme.org/" "port=${!application_incoming_port}&submit=Check" "success.*?on port.*?${!application_incoming_port}" "error.*?on port.*?${!application_incoming_port}"
 
-	# if web scrape error/site down then try second site (json)
-	if [[ "${EXTERNAL_SITE_UP}" == "false" ]]; then
-		check_incoming_port_json "https://ifconfig.co/port/${!application_incoming_port}" ".reachable"
+	if [[ "${INCOMING_PORT_OPEN}" == "true" ]]; then
+		rm -f "${failed_port_check_count_file}"
+		return
 	fi
 
-	# if port down then mark as closed
-	if [[ "${INCOMING_PORT_OPEN}" == "false" ]]; then
+	canyouseeme_port_closed="${INCOMING_PORT_CLOSED}"
+
+	# confirm with second site before deciding whether the incoming port is closed
+	check_incoming_port_json "https://ifconfig.co/port/${!application_incoming_port}" ".reachable"
+
+	if [[ "${INCOMING_PORT_OPEN}" == "true" ]]; then
+		rm -f "${failed_port_check_count_file}"
+		return
+	fi
+
+	if [[ "${canyouseeme_port_closed}" == "true" && "${INCOMING_PORT_CLOSED}" == "true" ]]; then
+		rm -f "${failed_port_check_count_file}"
+		echo "[info] ${APPLICATION} incoming port reported closed by multiple checks, marking for reconfigure"
 		touch "/tmp/portclosed"
 		return
 	fi
+
+	if [[ -f "${failed_port_check_count_file}" ]]; then
+		failed_port_check_count=$(< "${failed_port_check_count_file}")
+	fi
+
+	if ! [[ "${failed_port_check_count}" =~ ^[0-9]+$ ]]; then
+		failed_port_check_count=0
+	fi
+
+	failed_port_check_count=$((failed_port_check_count+1))
+	echo "${failed_port_check_count}" > "${failed_port_check_count_file}"
+
+	if [ "${failed_port_check_count}" -ge "${failed_port_check_limit}" ]; then
+		echo "[info] ${APPLICATION} incoming port not confirmed open after ${failed_port_check_limit} checks, marking for reconfigure"
+		touch "/tmp/portclosed"
+		return
+	fi
+
+	echo "[warn] ${APPLICATION} incoming port not confirmed open (${failed_port_check_count}/${failed_port_check_limit}), waiting for next check"
 }
 
 # this function reads in the contents of a temporary file which contains the current
