@@ -1,6 +1,9 @@
 FROM binhex/arch-qbittorrentvpn:latest
 
+ARG UPSTREAM_IMAGE_DIGEST=unknown
+
 LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
+LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
 
 COPY run/local/tools.sh /usr/local/bin/tools.sh
 RUN chmod +x /usr/local/bin/tools.sh

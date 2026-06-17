@@ -10,11 +10,15 @@ on:
       - run/local/tools.sh
       - .github/workflows/build-qbittorrent-portcheck.yml
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 4 * * *'
 
 permissions:
   contents: read
   packages: write
+
+env:
+  CUSTOM_IMAGE: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
+  UPSTREAM_IMAGE: binhex/arch-qbittorrentvpn:latest
 
 jobs:
   build:
@@ -27,11 +31,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check upstream digest
+        id: upstream
+        shell: bash
+        run: |
+          upstream_digest="$(docker buildx imagetools inspect "${UPSTREAM_IMAGE}" --raw | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          built_from_digest="$(docker buildx imagetools inspect "${CUSTOM_IMAGE}" --format '{{ index .Image.Config.Labels "io.tansien.upstream.digest" }}' 2>/dev/null || true)"
+
+          echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${{ github.event_name }}" == "schedule" && "${upstream_digest}" == "${built_from_digest}" ]]; then
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+            echo "Upstream unchanged (${upstream_digest}); skipping build."
+          else
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          fi
       - uses: docker/build-push-action@v6
+        if: steps.upstream.outputs.build == 'true'
         with:
           context: .
           file: Dockerfile.qbittorrent-portcheck
           platforms: linux/amd64
           pull: true
           push: true
-          tags: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
+          build-args: |
+            UPSTREAM_IMAGE_DIGEST=${{ steps.upstream.outputs.digest }}
+          tags: ${{ env.CUSTOM_IMAGE }}
