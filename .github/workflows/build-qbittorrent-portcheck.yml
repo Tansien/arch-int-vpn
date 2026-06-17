@@ -2,6 +2,15 @@ name: build-qbittorrent-portcheck
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - Dockerfile.qbittorrent-portcheck
+      - run/local/tools.sh
+      - .github/workflows/build-qbittorrent-portcheck.yml
+  schedule:
+    - cron: '17 */6 * * *'
 
 permissions:
   contents: read
@@ -23,5 +32,6 @@ jobs:
           context: .
           file: Dockerfile.qbittorrent-portcheck
           platforms: linux/amd64
+          pull: true
           push: true
           tags: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
