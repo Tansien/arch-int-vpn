@@ -2,6 +2,15 @@ name: build-qbittorrent-portcheck
 
 on:
   workflow_dispatch:
+    inputs:
+      upstream_image:
+        description: Upstream binhex image to extend
+        required: false
+        default: binhex/arch-qbittorrentvpn:latest
+      custom_image:
+        description: Custom image tag to publish
+        required: false
+        default: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
   push:
     branches:
       - master
@@ -17,8 +26,8 @@ permissions:
   packages: write
 
 env:
-  CUSTOM_IMAGE: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
-  UPSTREAM_IMAGE: binhex/arch-qbittorrentvpn:latest
+  DEFAULT_CUSTOM_IMAGE: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
+  DEFAULT_UPSTREAM_IMAGE: binhex/arch-qbittorrentvpn:latest
 
 jobs:
   build:
@@ -31,12 +40,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve image names
+        id: images
+        shell: bash
+        run: |
+          upstream_image="${{ github.event.inputs.upstream_image }}"
+          custom_image="${{ github.event.inputs.custom_image }}"
+          : "${upstream_image:=${DEFAULT_UPSTREAM_IMAGE}}"
+          : "${custom_image:=${DEFAULT_CUSTOM_IMAGE}}"
+          echo "upstream_image=${upstream_image}" >> "${GITHUB_OUTPUT}"
+          echo "custom_image=${custom_image}" >> "${GITHUB_OUTPUT}"
       - name: Check upstream digest
         id: upstream
         shell: bash
         run: |
-          upstream_digest="$(docker buildx imagetools inspect "${UPSTREAM_IMAGE}" --raw | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
-          built_from_digest="$(docker buildx imagetools inspect "${CUSTOM_IMAGE}" --format '{{ index .Image.Config.Labels "io.tansien.upstream.digest" }}' 2>/dev/null || true)"
+          upstream_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.upstream_image }}" --raw | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          built_from_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.custom_image }}" --format '{{ index .Image.Config.Labels "io.tansien.upstream.digest" }}' 2>/dev/null || true)"
 
           echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
 
@@ -55,5 +74,6 @@ jobs:
           pull: true
           push: true
           build-args: |
+            UPSTREAM_IMAGE=${{ steps.images.outputs.upstream_image }}
             UPSTREAM_IMAGE_DIGEST=${{ steps.upstream.outputs.digest }}
-          tags: ${{ env.CUSTOM_IMAGE }}
+          tags: ${{ steps.images.outputs.custom_image }}
