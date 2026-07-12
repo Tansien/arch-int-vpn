@@ -16,6 +16,7 @@ on:
       - master
     paths:
       - Dockerfile.qbittorrent-portcheck
+      - patches/qbittorrent-webapi-stability.patch
       - run/local/tools.sh
       - .github/workflows/build-qbittorrent-portcheck.yml
   schedule:
