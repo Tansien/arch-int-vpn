@@ -1,4 +1,25 @@
 ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
+FROM ${UPSTREAM_IMAGE} AS qbittorrent-builder
+
+COPY patches/qbittorrent-webapi-stability.patch /tmp/qbittorrent-webapi-stability.patch
+
+RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
+    printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
+        "${archive_date}" > /etc/pacman.d/mirrorlist && \
+    pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools && \
+    qbittorrent_version="$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" && \
+    git clone --branch "release-${qbittorrent_version}" --depth 1 \
+        https://github.com/qbittorrent/qBittorrent.git /tmp/qbittorrent && \
+    git -C /tmp/qbittorrent apply /tmp/qbittorrent-webapi-stability.patch && \
+    cmake -B /tmp/qbittorrent-build -S /tmp/qbittorrent \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DGUI=OFF \
+        -DSYSTEMD=OFF && \
+    cmake --build /tmp/qbittorrent-build --parallel 2 && \
+    DESTDIR=/tmp/qbittorrent-install cmake --install /tmp/qbittorrent-build --strip && \
+    printf '%s\n' "${qbittorrent_version}" > /tmp/qbittorrent-version
+
 FROM ${UPSTREAM_IMAGE}
 
 ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
@@ -7,6 +28,11 @@ ARG UPSTREAM_IMAGE_DIGEST=unknown
 LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
 LABEL io.tansien.upstream.image="${UPSTREAM_IMAGE}"
 LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
+LABEL io.tansien.qbittorrent.patch="webapi-auth-and-worker-priority"
 
+COPY --from=qbittorrent-builder /tmp/qbittorrent-install/usr/bin/qbittorrent-nox /usr/bin/qbittorrent-nox
+COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbittorrent-patched-version
 COPY run/local/tools.sh /usr/local/bin/tools.sh
-RUN chmod +x /usr/local/bin/tools.sh
+RUN chmod +x /usr/local/bin/tools.sh && \
+    test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \
+        "$(cat /usr/local/share/qbittorrent-patched-version)"

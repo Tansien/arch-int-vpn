@@ -1,0 +1,56 @@
+diff --git a/src/base/bittorrent/sessionimpl.h b/src/base/bittorrent/sessionimpl.h
+index 0005a70d0..e848ffb84 100644
+--- a/src/base/bittorrent/sessionimpl.h
++++ b/src/base/bittorrent/sessionimpl.h
+@@ -501,9 +501,9 @@ namespace BitTorrent
+         }
+ 
+         template <typename Func>
+-        void invokeAsync(Func &&func)
++        void invokeAsync(Func &&func, const int priority = 0)
+         {
+-            m_asyncWorker->start(std::forward<Func>(func));
++            m_asyncWorker->start(std::forward<Func>(func), priority);
+         }
+ 
+         bool isAddTrackersFromURLEnabled() const override;
+diff --git a/src/base/bittorrent/torrentimpl.cpp b/src/base/bittorrent/torrentimpl.cpp
+index bd7af56ac..b0c27ef59 100644
+--- a/src/base/bittorrent/torrentimpl.cpp
++++ b/src/base/bittorrent/torrentimpl.cpp
+@@ -2999,12 +2999,13 @@ QFuture<std::invoke_result_t<Func>> TorrentImpl::invokeAsync(Func &&func) const
+ {
+     QPromise<std::invoke_result_t<Func>> promise;
+     const auto future = promise.future();
+     promise.start();
++    // Keep interactive queries ahead of bulk tracker-status updates.
+     m_session->invokeAsync([func = std::forward<Func>(func), promise = std::move(promise)]() mutable
+     {
+         promise.addResult(func());
+         promise.finish();
+-    });
++    }, 1);
+ 
+     return future;
+ }
+diff --git a/src/webui/api/authcontroller.cpp b/src/webui/api/authcontroller.cpp
+index b393f7d4d..914a5f6a8 100644
+--- a/src/webui/api/authcontroller.cpp
++++ b/src/webui/api/authcontroller.cpp
+@@ -44,14 +44,14 @@ void AuthController::loginAction()
+ {
+     if (m_sessionManager->session())
+     {
+-        setStatus(APIStatus::Ok);
++        setResult(u"Ok."_s);
+         return;
+     }
+ 
+     if (m_sessionManager->validateCredentials(params()[u"username"_s], params()[u"password"_s]))
+     {
+         m_sessionManager->sessionStart();
+-        setStatus(APIStatus::Ok);
++        setResult(u"Ok."_s);
+     }
+     else
+     {
