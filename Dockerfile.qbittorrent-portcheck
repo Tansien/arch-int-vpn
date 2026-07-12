@@ -7,6 +7,18 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
         "${archive_date}" > /etc/pacman.d/mirrorlist && \
     pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools && \
+    git clone --branch v2.0.12 --depth 1 --recurse-submodules --shallow-submodules \
+        https://github.com/arvidn/libtorrent.git /tmp/libtorrent && \
+    cmake -B /tmp/libtorrent-build -S /tmp/libtorrent \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON \
+        -Dbuild_tests=OFF \
+        -Dbuild_examples=OFF \
+        -Dbuild_tools=OFF \
+        -Dpython-bindings=OFF && \
+    cmake --build /tmp/libtorrent-build --parallel 2 && \
+    cmake --install /tmp/libtorrent-build --strip && \
     qbittorrent_version="$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" && \
     git clone --branch "release-${qbittorrent_version}" --depth 1 \
         https://github.com/qbittorrent/qBittorrent.git /tmp/qbittorrent && \
@@ -18,7 +30,8 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
         -DSYSTEMD=OFF && \
     cmake --build /tmp/qbittorrent-build --parallel 2 && \
     DESTDIR=/tmp/qbittorrent-install cmake --install /tmp/qbittorrent-build --strip && \
-    printf '%s\n' "${qbittorrent_version}" > /tmp/qbittorrent-version
+    printf '%s\n' "${qbittorrent_version}" > /tmp/qbittorrent-version && \
+    printf '2.0.12\n' > /tmp/libtorrent-version
 
 FROM ${UPSTREAM_IMAGE}
 
@@ -28,11 +41,17 @@ ARG UPSTREAM_IMAGE_DIGEST=unknown
 LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
 LABEL io.tansien.upstream.image="${UPSTREAM_IMAGE}"
 LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
-LABEL io.tansien.qbittorrent.patch="webapi-auth-and-worker-priority"
+LABEL io.tansien.qbittorrent.patch="webapi-auth-worker-priority-and-bulk-pagination"
+LABEL io.tansien.libtorrent.version="2.0.12"
 
 COPY --from=qbittorrent-builder /tmp/qbittorrent-install/usr/bin/qbittorrent-nox /usr/bin/qbittorrent-nox
+COPY --from=qbittorrent-builder /usr/lib/libtorrent-rasterbar.so.2.0.12 /usr/lib/libtorrent-rasterbar.so.2.0.12
 COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbittorrent-patched-version
+COPY --from=qbittorrent-builder /tmp/libtorrent-version /usr/local/share/libtorrent-pinned-version
 COPY run/local/tools.sh /usr/local/bin/tools.sh
 RUN chmod +x /usr/local/bin/tools.sh && \
+    ln -sfn libtorrent-rasterbar.so.2.0.12 /usr/lib/libtorrent-rasterbar.so.2.0 && \
+    ln -sfn libtorrent-rasterbar.so.2.0.12 /usr/lib/libtorrent-rasterbar.so && \
     test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \
-        "$(cat /usr/local/share/qbittorrent-patched-version)"
+        "$(cat /usr/local/share/qbittorrent-patched-version)" && \
+    test "$(cat /usr/local/share/libtorrent-pinned-version)" = "2.0.12"

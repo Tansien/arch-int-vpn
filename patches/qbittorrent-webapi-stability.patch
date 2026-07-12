@@ -54,3 +54,48 @@ index b393f7d4d..914a5f6a8 100644
      }
      else
      {
+diff --git a/src/webui/api/torrentscontroller.cpp b/src/webui/api/torrentscontroller.cpp
+index 752053b43..1aae66fc5 100644
+--- a/src/webui/api/torrentscontroller.cpp
++++ b/src/webui/api/torrentscontroller.cpp
+@@ -624,14 +624,7 @@ void TorrentsController::infoAction()
+         if (!torrentFilter.match(torrent))
+             continue;
+ 
+-        QVariantMap serializedTorrent = serialize(*torrent);
+-
+-        if (includeFiles && torrent->hasMetadata())
+-            serializedTorrent.insert(KEY_PROP_FILES, getFiles(torrent));
+-        if (includeTrackers)
+-            serializedTorrent.insert(KEY_PROP_TRACKERS, getTrackers(torrent));
+-
+-        torrentList.append(serializedTorrent);
++        torrentList.append(serialize(*torrent));
+     }
+ 
+     if (torrentList.isEmpty())
+@@ -691,6 +684,24 @@ void TorrentsController::infoAction()
+     if ((limit > 0) || (offset > 0))
+         torrentList = torrentList.mid(offset, limit);
+ 
++    if (includeFiles || includeTrackers)
++    {
++        for (QVariant &torrentData : torrentList)
++        {
++            QVariantMap serializedTorrent = torrentData.toMap();
++            const auto id = BitTorrent::TorrentID::fromString(serializedTorrent[KEY_TORRENT_ID].toString());
++            const BitTorrent::Torrent *const torrent = BitTorrent::Session::instance()->getTorrent(id);
++            Q_ASSERT(torrent);
++
++            if (includeFiles && torrent->hasMetadata())
++                serializedTorrent.insert(KEY_PROP_FILES, getFiles(torrent));
++            if (includeTrackers)
++                serializedTorrent.insert(KEY_PROP_TRACKERS, getTrackers(torrent));
++
++            torrentData = serializedTorrent;
++        }
++    }
++
+     setResult(QJsonArray::fromVariantList(torrentList));
+ }
+ 
