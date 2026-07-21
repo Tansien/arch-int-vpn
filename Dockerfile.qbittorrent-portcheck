@@ -56,6 +56,7 @@ COPY run/local/tools.sh /usr/local/bin/tools.sh
 RUN chmod +x /usr/local/bin/tools.sh && \
     ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0 && \
     ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so && \
+    readelf -Ws /usr/lib/libtorrent-rasterbar.so.2.0.13 | grep -q 'UND.*BN_mod_exp_mont_consttime' && \
     test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \
         "$(cat /usr/local/share/qbittorrent-patched-version)" && \
     test "$(cat /usr/local/share/libtorrent-pinned-version)" = "2.0.13"

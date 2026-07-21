@@ -23,6 +23,10 @@ on:
   schedule:
     - cron: '17 4 * * *'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.custom_image || 'ghcr.io/tansien/qbittorrentvpn-portcheck:latest' }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -56,10 +60,26 @@ jobs:
         id: upstream
         shell: bash
         run: |
-          upstream_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.upstream_image }}" --raw | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          manifest="$(docker buildx imagetools inspect "${{ steps.images.outputs.upstream_image }}" --format '{{json .Manifest}}')"
+          upstream_digest="$(jq -er '
+            if .manifests then
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")]
+              | if length == 1 then .[0].digest else error("expected exactly one linux/amd64 manifest") end
+            else
+              .digest
+            end
+            | select(test("^sha256:[0-9a-f]{64}$"))
+          ' <<< "${manifest}")"
+          upstream_reference="${{ steps.images.outputs.upstream_image }}"
+          upstream_reference="${upstream_reference%@*}@${upstream_digest}"
+          custom_image="${{ steps.images.outputs.custom_image }}"
+          custom_repository="${custom_image%:*}"
+          immutable_image="${custom_repository}:git-${GITHUB_SHA}-upstream-${upstream_digest#sha256:}"
           built_from_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.custom_image }}" --format '{{ index .Image.Config.Labels "io.tansien.upstream.digest" }}' 2>/dev/null || true)"
 
           echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
+          echo "reference=${upstream_reference}" >> "${GITHUB_OUTPUT}"
+          echo "immutable_image=${immutable_image}" >> "${GITHUB_OUTPUT}"
 
           if [[ "${{ github.event_name }}" == "schedule" && "${upstream_digest}" == "${built_from_digest}" ]]; then
             echo "build=false" >> "${GITHUB_OUTPUT}"
@@ -76,6 +96,8 @@ jobs:
           pull: true
           push: true
           build-args: |
-            UPSTREAM_IMAGE=${{ steps.images.outputs.upstream_image }}
+            UPSTREAM_IMAGE=${{ steps.upstream.outputs.reference }}
             UPSTREAM_IMAGE_DIGEST=${{ steps.upstream.outputs.digest }}
-          tags: ${{ steps.images.outputs.custom_image }}
+          tags: |
+            ${{ steps.images.outputs.custom_image }}
+            ${{ steps.upstream.outputs.immutable_image }}
