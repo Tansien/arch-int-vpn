@@ -7,18 +7,20 @@ on:
       - master
     paths:
       - Dockerfile.qbittorrent-portcheck
+      - packaging/libtorrent/PKGBUILD
       - patches/libtorrent-openssl-dh.patch
       - patches/qbittorrent-webapi-stability.patch
       - patches/binhex-portcheck.patch
       - run/local/tools.sh
       - tests/test-port-check.sh
+      - tests/test-webapi-basic-sessions.sh
       - .github/workflows/build-qbittorrent-portcheck.yml
   schedule:
     - cron: '17 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-ghcr.io/tansien/qbittorrentvpn-portcheck:latest
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -34,6 +36,7 @@ env:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -65,6 +68,7 @@ jobs:
           immutable_image="${custom_repository}:git-${GITHUB_SHA}-upstream-${upstream_digest#sha256:}"
           built_labels="$(docker buildx imagetools inspect "${DEFAULT_CUSTOM_IMAGE}" --format '{{json .Image.Config.Labels}}' 2>/dev/null || true)"
           built_from_digest="$(jq -r '."io.tansien.upstream.digest" // empty' <<< "${built_labels}" 2>/dev/null || true)"
+          built_source_commit="$(jq -r '."io.tansien.source.commit" // empty' <<< "${built_labels}" 2>/dev/null || true)"
           built_qbittorrent_commit="$(jq -r '."io.tansien.qbittorrent.commit" // empty' <<< "${built_labels}" 2>/dev/null || true)"
           built_libtorrent_commit="$(jq -r '."io.tansien.libtorrent.commit" // empty' <<< "${built_labels}" 2>/dev/null || true)"
 
@@ -74,6 +78,7 @@ jobs:
 
           if [[ "${{ github.event_name }}" == "schedule"
               && "${upstream_digest}" == "${built_from_digest}"
+              && "${GITHUB_SHA}" == "${built_source_commit}"
               && "${QBITTORRENT_COMMIT}" == "${built_qbittorrent_commit}"
               && "${LIBTORRENT_COMMIT}" == "${built_libtorrent_commit}" ]]; then
             echo "build=false" >> "${GITHUB_OUTPUT}"
@@ -92,12 +97,21 @@ jobs:
           build-args: |
             UPSTREAM_IMAGE=${{ steps.upstream.outputs.reference }}
             UPSTREAM_IMAGE_DIGEST=${{ steps.upstream.outputs.digest }}
+            SOURCE_COMMIT=${{ github.sha }}
             QBITTORRENT_VERSION=${{ env.QBITTORRENT_VERSION }}
             QBITTORRENT_COMMIT=${{ env.QBITTORRENT_COMMIT }}
             LIBTORRENT_COMMIT=${{ env.LIBTORRENT_COMMIT }}
           tags: |
-            ${{ env.DEFAULT_CUSTOM_IMAGE }}
             ${{ steps.upstream.outputs.immutable_image }}
+      - name: Test built image
+        if: steps.upstream.outputs.build == 'true'
+        run: |
+          tests/test-port-check.sh "${{ steps.upstream.outputs.immutable_image }}"
+          tests/test-webapi-basic-sessions.sh "${{ steps.upstream.outputs.immutable_image }}"
+      - name: Publish latest
+        if: steps.upstream.outputs.build == 'true'
+        run: docker buildx imagetools create --tag "${DEFAULT_CUSTOM_IMAGE}" "${{ steps.upstream.outputs.immutable_image }}"
       - name: Record rollback image
+        if: always()
         run: |
           printf 'Known-good rollback image: `%s`\n' "${ROLLBACK_IMAGE}" >> "${GITHUB_STEP_SUMMARY}"

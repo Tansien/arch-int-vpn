@@ -1,0 +1,41 @@
+pkgname=libtorrent-rasterbar
+epoch=2
+pkgver=2.0.13
+pkgrel=1
+pkgdesc="Pinned libtorrent build for qBittorrent"
+arch=(x86_64)
+url="https://libtorrent.org/"
+license=(BSD-3-Clause)
+depends=(boost-libs glibc libgcc libstdc++ openssl)
+makedepends=(boost cmake git)
+options=(!debug)
+source=("libtorrent::git+https://github.com/arvidn/libtorrent.git#commit=${LIBTORRENT_COMMIT:?}"
+        libtorrent-openssl-dh.patch)
+sha256sums=('SKIP'
+            '6de27cdf0112d00a4eaf4f58dbe74775ed71999921b375e5fe609f6eebf4e5ea')
+
+prepare() {
+    test "$(git -C libtorrent rev-parse HEAD)" = "${LIBTORRENT_COMMIT}"
+    git -C libtorrent submodule update --init --recursive --depth 1
+    git -C libtorrent apply ../libtorrent-openssl-dh.patch
+}
+
+build() {
+    cmake -B build -S libtorrent \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON \
+        -Dbuild_tests=ON \
+        -Dbuild_examples=OFF \
+        -Dbuild_tools=OFF \
+        -Dpython-bindings=OFF
+    cmake --build build --parallel 2 --target test_pe_crypto
+}
+
+check() {
+    build/test/test_pe_crypto
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build --strip
+}

@@ -1,32 +1,26 @@
 diff --git a/src/base/bittorrent/sessionimpl.cpp b/src/base/bittorrent/sessionimpl.cpp
-index 5f3f101fd..18b351f22 100644
+index 5f3f101fd..3f81afcbf 100644
 --- a/src/base/bittorrent/sessionimpl.cpp
 +++ b/src/base/bittorrent/sessionimpl.cpp
-@@ -6595,7 +6595,7 @@ void SessionImpl::updateTrackerEntryStatuses(lt::torrent_handle torrentHandle)
-         catch (const std::exception &)
+@@ -6561,14 +6561,14 @@ void SessionImpl::updateTrackerEntryStatuses(lt::torrent_handle torrentHandle)
+ {
+     invokeAsync([this, torrentHandle = std::move(torrentHandle)]
+     {
++        QMutexLocker updatedTrackerStatusesLocker {&m_updatedTrackerStatusesMutex};
++        QHash<std::string, QHash<lt::tcp::endpoint, QMap<int, int>>> updatedTrackers = m_updatedTrackerStatuses.take(torrentHandle);
++        updatedTrackerStatusesLocker.unlock();
++
+         try
          {
-         }
--    });
-+    }, -1);
- }
+             std::vector<lt::announce_entry> nativeTrackers = torrentHandle.trackers();
  
- void SessionImpl::handleRemovedTorrent(const TorrentID &torrentID, const QString &partfileRemoveError)
-diff --git a/src/base/bittorrent/sessionimpl.h b/src/base/bittorrent/sessionimpl.h
-index 0005a70d0..e848ffb84 100644
---- a/src/base/bittorrent/sessionimpl.h
-+++ b/src/base/bittorrent/sessionimpl.h
-@@ -501,9 +501,9 @@ namespace BitTorrent
-         }
- 
-         template <typename Func>
--        void invokeAsync(Func &&func)
-+        void invokeAsync(Func &&func, const int priority = 0)
-         {
--            m_asyncWorker->start(std::forward<Func>(func));
-+            m_asyncWorker->start(std::forward<Func>(func), priority);
-         }
- 
-         bool isAddTrackersFromURLEnabled() const override;
+-            QMutexLocker updatedTrackerStatusesLocker {&m_updatedTrackerStatusesMutex};
+-            QHash<std::string, QHash<lt::tcp::endpoint, QMap<int, int>>> updatedTrackers = m_updatedTrackerStatuses.take(torrentHandle);
+-            updatedTrackerStatusesLocker.unlock();
+-
+             invoke([this, infoHash = torrentHandle.info_hash(), nativeTrackers = std::move(nativeTrackers), updatedTrackers = std::move(updatedTrackers)]
+             {
+                 TorrentImpl *torrent = m_torrents.value(infoHash);
 diff --git a/src/webui/api/authcontroller.cpp b/src/webui/api/authcontroller.cpp
 index b393f7d4d..914a5f6a8 100644
 --- a/src/webui/api/authcontroller.cpp
@@ -94,19 +88,22 @@ index 752053b43..1aae66fc5 100644
  }
  
 diff --git a/src/webui/webapplication.cpp b/src/webui/webapplication.cpp
-index 91d9c80fd..0c578418f 100644
+index 91d9c80fd..8f273d589 100644
 --- a/src/webui/webapplication.cpp
 +++ b/src/webui/webapplication.cpp
-@@ -732,7 +732,23 @@ void WebApplication::sessionInitialize()
+@@ -732,7 +732,27 @@ void WebApplication::sessionInitialize()
      {
          if (!validateBasicAuth(credentials))
              throw UnauthorizedHTTPError();
 -        sessionStart();
 +
-+        m_currentSession = m_sessions.value(m_basicAuthSessionId);
++        const QString basicAuthClientId = clientId() + u'\n' + m_request.headers.value(u"user-agent"_s);
++        const QString sessionId = m_basicAuthSessionIds.value(basicAuthClientId);
++        m_currentSession = m_sessions.value(sessionId);
 +        if (m_currentSession && m_currentSession->hasExpired(m_sessionTimeout))
 +        {
-+            delete m_sessions.take(m_basicAuthSessionId);
++            delete m_sessions.take(sessionId);
++            m_basicAuthSessionIds.remove(basicAuthClientId);
 +            m_currentSession = nullptr;
 +        }
 +
@@ -116,13 +113,22 @@ index 91d9c80fd..0c578418f 100644
 +        }
 +        else
 +        {
-+            m_basicAuthSessionId = generateSid();
-+            sessionStartImpl(m_basicAuthSessionId, true);
++            const QString newSessionId = generateSid();
++            sessionStartImpl(newSessionId, true);
++            m_basicAuthSessionIds[basicAuthClientId] = newSessionId;
 +        }
      }
  }
  
-@@ -836,20 +852,30 @@ void WebApplication::sessionStartImpl(const QString &sessionId, const bool useCo
+@@ -832,24 +852,38 @@ void WebApplication::sessionStartImpl(const QString &sessionId, const bool useCo
+ 
+         return false;
+     });
++    Algorithm::removeIf(m_basicAuthSessionIds, [this](const QString &, const QString &sessionId)
++    {
++        return !m_sessions.contains(sessionId);
++    });
+ 
      m_currentSession = new WebSession(sessionId, app());
      m_sessions[m_currentSession->id()] = m_currentSession;
  
@@ -167,7 +173,7 @@ index 91d9c80fd..0c578418f 100644
  
      if (useCookie)
          setSessionCookie();
-@@ -1130,13 +1156,20 @@ void WebSession::setCookieRefreshTime(const std::chrono::seconds timeout)
+@@ -1130,13 +1164,20 @@ void WebSession::setCookieRefreshTime(const std::chrono::seconds timeout)
      m_cookieRefreshTimer.setRemainingTime(time);
  }
  
@@ -193,7 +199,7 @@ index 91d9c80fd..0c578418f 100644
 +    return iter->instance;
  }
 diff --git a/src/webui/webapplication.h b/src/webui/webapplication.h
-index 3dedda7b9..feb64d69a 100644
+index 3dedda7b9..198ba790b 100644
 --- a/src/webui/webapplication.h
 +++ b/src/webui/webapplication.h
 @@ -30,6 +30,7 @@
@@ -240,7 +246,7 @@ index 3dedda7b9..feb64d69a 100644
  
      // Persistent data
      QHash<QString, WebSession *> m_sessions;
-+    QString m_basicAuthSessionId;
++    QHash<QString, QString> m_basicAuthSessionIds;
  
      // Current data
      WebSession *m_currentSession = nullptr;

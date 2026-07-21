@@ -8,37 +8,19 @@ ARG QBITTORRENT_VERSION
 ARG QBITTORRENT_COMMIT
 ARG LIBTORRENT_COMMIT
 
-COPY patches/qbittorrent-webapi-stability.patch /tmp/qbittorrent-webapi-stability.patch
-COPY patches/libtorrent-openssl-dh.patch /tmp/libtorrent-openssl-dh.patch
-COPY patches/binhex-portcheck.patch /tmp/binhex-portcheck.patch
-
 RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
         "${archive_date}" > /etc/pacman.d/mirrorlist && \
-    pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools && \
-    mkdir -p /tmp/binhex/run/local && \
-    cp /usr/local/bin/tools.sh /tmp/binhex/run/local/tools.sh && \
-    patch --batch --forward -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch && \
-    git init /tmp/libtorrent && \
-    git -C /tmp/libtorrent remote add origin https://github.com/arvidn/libtorrent.git && \
-    git -C /tmp/libtorrent fetch --depth 1 origin "${LIBTORRENT_COMMIT}" && \
-    git -C /tmp/libtorrent checkout --detach "${LIBTORRENT_COMMIT}" && \
-    test "$(git -C /tmp/libtorrent rev-parse HEAD)" = "${LIBTORRENT_COMMIT}" && \
-    git -C /tmp/libtorrent submodule update --init --recursive --depth 1 && \
-    git -C /tmp/libtorrent apply /tmp/libtorrent-openssl-dh.patch && \
-    cmake -B /tmp/libtorrent-build -S /tmp/libtorrent \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr \
-        -DBUILD_SHARED_LIBS=ON \
-        -Dbuild_tests=ON \
-        -Dbuild_examples=OFF \
-        -Dbuild_tools=OFF \
-        -Dpython-bindings=OFF && \
-    cmake --build /tmp/libtorrent-build --parallel 2 --target test_pe_crypto && \
-    /tmp/libtorrent-build/test/test_pe_crypto && \
-    cmake --install /tmp/libtorrent-build --strip && \
-    test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = "${QBITTORRENT_VERSION}" && \
-    git init /tmp/qbittorrent && \
+    pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools
+COPY --chown=nobody:users packaging/libtorrent/PKGBUILD /tmp/libtorrent-package/PKGBUILD
+COPY --chown=nobody:users patches/libtorrent-openssl-dh.patch /tmp/libtorrent-package/libtorrent-openssl-dh.patch
+RUN cd /tmp/libtorrent-package && \
+    runuser -u nobody -- env LIBTORRENT_COMMIT="${LIBTORRENT_COMMIT}" makepkg --noconfirm --cleanbuild --clean
+RUN test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = "${QBITTORRENT_VERSION}" && \
+    pacman -U --noconfirm /tmp/libtorrent-package/libtorrent-rasterbar-*.pkg.tar.zst && \
+    test "$(pacman -Q libtorrent-rasterbar)" = "libtorrent-rasterbar 2:2.0.13-1"
+COPY patches/qbittorrent-webapi-stability.patch /tmp/qbittorrent-webapi-stability.patch
+RUN git init /tmp/qbittorrent && \
     git -C /tmp/qbittorrent remote add origin https://github.com/qbittorrent/qBittorrent.git && \
     git -C /tmp/qbittorrent fetch --depth 1 origin "${QBITTORRENT_COMMIT}" && \
     git -C /tmp/qbittorrent checkout --detach "${QBITTORRENT_COMMIT}" && \
@@ -53,11 +35,16 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     DESTDIR=/tmp/qbittorrent-install cmake --install /tmp/qbittorrent-build --strip && \
     printf '%s\n' "${QBITTORRENT_VERSION}" > /tmp/qbittorrent-version && \
     printf '2.0.13\n' > /tmp/libtorrent-version
+COPY patches/binhex-portcheck.patch /tmp/binhex-portcheck.patch
+RUN mkdir -p /tmp/binhex/run/local && \
+    cp /usr/local/bin/tools.sh /tmp/binhex/run/local/tools.sh && \
+    patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch
 
 FROM ${UPSTREAM_IMAGE}
 
 ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
 ARG UPSTREAM_IMAGE_DIGEST=unknown
+ARG SOURCE_COMMIT=unknown
 ARG QBITTORRENT_VERSION
 ARG QBITTORRENT_COMMIT
 ARG LIBTORRENT_COMMIT
@@ -65,21 +52,23 @@ ARG LIBTORRENT_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
 LABEL io.tansien.upstream.image="${UPSTREAM_IMAGE}"
 LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
+LABEL io.tansien.source.commit="${SOURCE_COMMIT}"
 LABEL io.tansien.qbittorrent.version="${QBITTORRENT_VERSION}"
 LABEL io.tansien.qbittorrent.commit="${QBITTORRENT_COMMIT}"
-LABEL io.tansien.qbittorrent.patch="webapi-auth-session-worker-priority-and-bulk-pagination"
+LABEL io.tansien.qbittorrent.patch="webapi-basic-session-isolation-and-bulk-pagination"
 LABEL io.tansien.libtorrent.version="2.0.13"
 LABEL io.tansien.libtorrent.commit="${LIBTORRENT_COMMIT}"
 LABEL io.tansien.libtorrent.patch="openssl-constant-time-dh"
 
 COPY --from=qbittorrent-builder /tmp/qbittorrent-install/usr/bin/qbittorrent-nox /usr/bin/qbittorrent-nox
-COPY --from=qbittorrent-builder /usr/lib/libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0.13
+COPY --from=qbittorrent-builder /tmp/libtorrent-package/libtorrent-rasterbar-*.pkg.tar.zst /tmp/
 COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbittorrent-patched-version
 COPY --from=qbittorrent-builder /tmp/libtorrent-version /usr/local/share/libtorrent-pinned-version
 COPY --from=qbittorrent-builder /tmp/binhex/run/local/tools.sh /usr/local/bin/tools.sh
-RUN chmod +x /usr/local/bin/tools.sh && \
-    ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0 && \
-    ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so && \
+RUN pacman -U --noconfirm /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
+    rm -f /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
+    chmod +x /usr/local/bin/tools.sh && \
+    test "$(pacman -Q libtorrent-rasterbar)" = "libtorrent-rasterbar 2:2.0.13-1" && \
     readelf -Ws /usr/lib/libtorrent-rasterbar.so.2.0.13 | grep -q 'UND.*BN_mod_exp_mont_consttime' && \
     test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \
         "$(cat /usr/local/share/qbittorrent-patched-version)" && \
