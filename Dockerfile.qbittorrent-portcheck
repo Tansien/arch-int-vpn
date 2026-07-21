@@ -2,6 +2,7 @@ ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
 FROM ${UPSTREAM_IMAGE} AS qbittorrent-builder
 
 COPY patches/qbittorrent-webapi-stability.patch /tmp/qbittorrent-webapi-stability.patch
+COPY patches/libtorrent-openssl-dh.patch /tmp/libtorrent-openssl-dh.patch
 
 RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
@@ -9,15 +10,17 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools && \
     git clone --branch v2.0.13 --depth 1 --recurse-submodules --shallow-submodules \
         https://github.com/arvidn/libtorrent.git /tmp/libtorrent && \
+    git -C /tmp/libtorrent apply /tmp/libtorrent-openssl-dh.patch && \
     cmake -B /tmp/libtorrent-build -S /tmp/libtorrent \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DBUILD_SHARED_LIBS=ON \
-        -Dbuild_tests=OFF \
+        -Dbuild_tests=ON \
         -Dbuild_examples=OFF \
         -Dbuild_tools=OFF \
         -Dpython-bindings=OFF && \
-    cmake --build /tmp/libtorrent-build --parallel 2 && \
+    cmake --build /tmp/libtorrent-build --parallel 2 --target test_pe_crypto && \
+    /tmp/libtorrent-build/test/test_pe_crypto && \
     cmake --install /tmp/libtorrent-build --strip && \
     qbittorrent_version="$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" && \
     git clone --branch "release-${qbittorrent_version}" --depth 1 \
@@ -43,6 +46,7 @@ LABEL io.tansien.upstream.image="${UPSTREAM_IMAGE}"
 LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
 LABEL io.tansien.qbittorrent.patch="webapi-auth-worker-priority-and-bulk-pagination"
 LABEL io.tansien.libtorrent.version="2.0.13"
+LABEL io.tansien.libtorrent.patch="openssl-constant-time-dh"
 
 COPY --from=qbittorrent-builder /tmp/qbittorrent-install/usr/bin/qbittorrent-nox /usr/bin/qbittorrent-nox
 COPY --from=qbittorrent-builder /usr/lib/libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0.13
