@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Test port-check decisions
         run: tests/test-port-check.sh
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -76,6 +78,7 @@ jobs:
           echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${upstream_reference}" >> "${GITHUB_OUTPUT}"
           echo "immutable_image=${immutable_image}" >> "${GITHUB_OUTPUT}"
+          echo "repository=${custom_repository}" >> "${GITHUB_OUTPUT}"
 
           if [[ "${{ github.event_name }}" == "schedule"
               && "${upstream_digest}" == "${built_from_digest}"
@@ -88,6 +91,7 @@ jobs:
             echo "build=true" >> "${GITHUB_OUTPUT}"
           fi
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: image
         if: steps.upstream.outputs.build == 'true'
         with:
           context: .
@@ -107,11 +111,25 @@ jobs:
       - name: Test built image
         if: steps.upstream.outputs.build == 'true'
         run: |
-          tests/test-port-check.sh "${{ steps.upstream.outputs.immutable_image }}"
-          tests/test-webapi-basic-sessions.sh "${{ steps.upstream.outputs.immutable_image }}"
+          built_image="${{ steps.upstream.outputs.repository }}@${{ steps.image.outputs.digest }}"
+          docker pull "${built_image}"
+          docker logout ghcr.io
+          docker run --rm --network none --cap-drop ALL --user nobody \
+            --security-opt no-new-privileges:true --entrypoint /bin/bash \
+            --volume "${GITHUB_WORKSPACE}/tests/test-port-check.sh:/test-port-check.sh:ro" \
+            "${built_image}" /test-port-check.sh /usr/local/bin/tools.sh
+          tests/test-webapi-basic-sessions.sh "${built_image}"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: steps.upstream.outputs.build == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish latest
         if: steps.upstream.outputs.build == 'true'
-        run: docker buildx imagetools create --tag "${DEFAULT_CUSTOM_IMAGE}" "${{ steps.upstream.outputs.immutable_image }}"
+        run: |
+          docker buildx imagetools create --tag "${DEFAULT_CUSTOM_IMAGE}" \
+            "${{ steps.upstream.outputs.repository }}@${{ steps.image.outputs.digest }}"
       - name: Record rollback image
         if: always()
         run: |

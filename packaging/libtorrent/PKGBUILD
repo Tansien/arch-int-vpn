@@ -7,21 +7,20 @@ arch=(x86_64)
 url="https://libtorrent.org/"
 license=(BSD-3-Clause)
 depends=(boost-libs glibc libgcc libstdc++ openssl)
-makedepends=(boost cmake git)
+makedepends=(boost cmake)
 options=(!debug)
-source=("libtorrent::git+https://github.com/arvidn/libtorrent.git#commit=${LIBTORRENT_COMMIT:?}"
+source=("https://github.com/arvidn/libtorrent/releases/download/v${pkgver}/libtorrent-rasterbar-${pkgver}.tar.gz"
         libtorrent-openssl-dh.patch)
-sha256sums=('SKIP'
+sha256sums=('892cb75c06318e2420de0faf9f63a908069d3d237676e2459fd30abe0cb3b1bf'
             '6de27cdf0112d00a4eaf4f58dbe74775ed71999921b375e5fe609f6eebf4e5ea')
 
 prepare() {
-    test "$(git -C libtorrent rev-parse HEAD)" = "${LIBTORRENT_COMMIT}"
-    git -C libtorrent submodule update --init --recursive --depth 1
-    git -C libtorrent apply ../libtorrent-openssl-dh.patch
+    patch --directory="libtorrent-rasterbar-${pkgver}" --strip=1 \
+        --input="../libtorrent-openssl-dh.patch"
 }
 
 build() {
-    cmake -B build -S libtorrent \
+    cmake -B build -S "libtorrent-rasterbar-${pkgver}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DBUILD_SHARED_LIBS=ON \

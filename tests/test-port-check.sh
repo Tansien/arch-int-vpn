@@ -4,18 +4,14 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d)"
-container=""
 cleanup() {
-	[[ -z "${container}" ]] || docker rm -f "${container}" >/dev/null 2>&1 || true
 	rm -rf "${test_dir}"
 }
 trap cleanup EXIT
 
 mkdir -p "${test_dir}/run/local"
 if [[ $# -eq 1 ]]; then
-	container="port-check-test-$$"
-	docker create --name "${container}" "${1}" >/dev/null
-	docker cp "${container}:/usr/local/bin/tools.sh" "${test_dir}/run/local/tools.sh"
+	cp "${1}" "${test_dir}/run/local/tools.sh"
 else
 	cp "${repo_root}/run/local/tools.sh" "${test_dir}/run/local/tools.sh"
 	patch --batch --forward --fuzz=0 -p1 -d "${test_dir}" < "${repo_root}/patches/binhex-portcheck.patch"
@@ -23,10 +19,28 @@ fi
 source "${test_dir}/run/local/tools.sh"
 
 APPLICATION="qbittorrent"
+DEBUG="false"
 qbittorrent_port="12345"
 external_ip="192.0.2.1"
 PORT_CLOSED_FILE="${test_dir}/portclosed"
 PORT_CLOSED_COUNT_FILE="${test_dir}/portclosed-count"
+
+curl() {
+	printf x >> "${test_dir}/curl-count"
+	printf 'success on port 12345\n'
+}
+grep() {
+	local arg
+	local args=()
+	for arg in "$@"; do
+		[[ "${arg}" == -P ]] || args+=("${arg}")
+	done
+	command grep "${args[@]}"
+}
+check_incoming_port_webscrape test-url test-data 'success.*12345' 'error.*12345'
+test "$(wc -c < "${test_dir}/curl-count")" -eq 1
+test "${INCOMING_PORT_OPEN}" = true
+unset -f curl grep
 
 check_incoming_port_webscrape() {
 	INCOMING_PORT_OPEN="${WEB_OPEN}"
@@ -73,9 +87,9 @@ grep -q '^192.0.2.1:12345 1$' "${PORT_CLOSED_COUNT_FILE}"
 
 assert_port_state false false true false false
 assert_port_state false false false false false false
+grep -q '^192.0.2.1:12345 2$' "${PORT_CLOSED_COUNT_FILE}"
+assert_port_state true false false false false false
 test ! -e "${PORT_CLOSED_COUNT_FILE}"
-assert_port_state false false true false false false
-grep -q '^192.0.2.1:12345 1$' "${PORT_CLOSED_COUNT_FILE}"
 
 external_ip="192.0.2.2"
 assert_port_state false false true false false false

@@ -11,3 +11,14 @@ diff --git a/usr/bin/init.sh b/usr/bin/init.sh
  		exit_code_chmod=$?
  		set -e
  
+diff --git a/root/wireguard.sh b/root/wireguard.sh
+--- a/root/wireguard.sh
++++ b/root/wireguard.sh
+@@ -60,6 +60,7 @@ Endpoint = ${VPN_REMOTE_SERVER}:${VPN_REMOTE_PORT}
+ 
+ EOF
+ 
++chmod 600 "${VPN_CONFIG}"
+ }
+ 
+ function watchdog() {

@@ -1,8 +1,11 @@
 diff --git a/run/local/tools.sh b/run/local/tools.sh
-index a158fc6..566454e 100755
 --- a/run/local/tools.sh
 +++ b/run/local/tools.sh
-@@ -387,6 +387,7 @@ function check_incoming_port_webscrape() {
+@@ -384,16 +384,20 @@ function check_incoming_port_webscrape() {
+ 	local regex_open="${1}"
+ 	shift
+ 	local regex_closed="${1}"
++	local response
  
  	EXTERNAL_SITE_UP="false"
  	INCOMING_PORT_OPEN="false"
@@ -10,9 +13,23 @@ index a158fc6..566454e 100755
  
  	if [[ "${DEBUG}" == "true" ]]; then
  		echo "[debug] Checking ${APPLICATION} incoming port '${!application_incoming_port}' is open, using external url '${incoming_port_check_url}'..."
-@@ -407,8 +408,9 @@ function check_incoming_port_webscrape() {
+ 	fi
+ 
+-	# use curl to check incoming port is open (web scrape)
+-	if curl --connect-timeout 30 --max-time 120 --silent --data "${post_data}" -X POST "${incoming_port_check_url}" | grep -i -P "${regex_open}" 1> /dev/null; then
++	# fetch once so the open and closed decisions use the same response
++	response="$(curl --connect-timeout "${PORT_CHECK_CONNECT_TIMEOUT:-5}" --max-time "${PORT_CHECK_MAX_TIME:-15}" \
++		--silent --data "${post_data}" -X POST "${incoming_port_check_url}" || true)"
++	if grep -i -P "${regex_open}" <<< "${response}" 1> /dev/null; then
+ 
+ 		if [[ "${DEBUG}" == "true" ]]; then
+ 			echo "[debug] ${APPLICATION} incoming port '${!application_incoming_port}' is open"
+@@ -405,10 +409,11 @@ function check_incoming_port_webscrape() {
+ 	else
+ 
  		# if port is not open then check we have a match for closed, if no match then suspect web scrape issue
- 		if curl --connect-timeout 30 --max-time 120 --silent --data "${post_data}" -X POST "${incoming_port_check_url}" | grep -i -P "${regex_closed}" 1> /dev/null; then
+-		if curl --connect-timeout 30 --max-time 120 --silent --data "${post_data}" -X POST "${incoming_port_check_url}" | grep -i -P "${regex_closed}" 1> /dev/null; then
++		if grep -i -P "${regex_closed}" <<< "${response}" 1> /dev/null; then
  
 -			echo "[info] ${APPLICATION} incoming port closed, marking for reconfigure"
 +			echo "[info] ${APPLICATION} incoming port reported closed"
@@ -21,7 +38,15 @@ index a158fc6..566454e 100755
  			return
  
  		else
-@@ -430,6 +432,7 @@ function check_incoming_port_json() {
+@@ -425,17 +430,21 @@ function check_incoming_port_webscrape() {
+ # function to check incoming port is open (json)
+ function check_incoming_port_json() {
+ 
+-	incoming_port_check_url="${1}"
+-	json_query="${2}"
++	local incoming_port_check_url="${1}"
++	local json_query="${2}"
++	local response
  
  	EXTERNAL_SITE_UP="false"
  	INCOMING_PORT_OPEN="false"
@@ -29,7 +54,16 @@ index a158fc6..566454e 100755
  
  	if [[ "${DEBUG}" == "true" ]]; then
  		echo "[debug] Checking ${APPLICATION} incoming port '${!application_incoming_port}' is open, using external url '${incoming_port_check_url}'..."
-@@ -448,8 +451,9 @@ function check_incoming_port_json() {
+ 	fi
+ 
+-	response=$(curl --connect-timeout 30 --max-time 120 --silent "${incoming_port_check_url}" | jq "${json_query}")
++	response="$(curl --connect-timeout "${PORT_CHECK_CONNECT_TIMEOUT:-5}" --max-time "${PORT_CHECK_MAX_TIME:-15}" \
++		--silent "${incoming_port_check_url}" || true)"
++	response="$(jq "${json_query}" <<< "${response}" 2> /dev/null || true)"
+ 
+ 	if [[ "${response}" == "true" ]]; then
+ 
+@@ -448,8 +457,9 @@ function check_incoming_port_json() {
  
  	elif [[ "${response}" == "false" ]]; then
  
@@ -40,18 +74,23 @@ index a158fc6..566454e 100755
  		return
  
  	else
-@@ -466,6 +470,10 @@ function check_incoming_port() {
+@@ -466,6 +476,15 @@ function check_incoming_port() {
  
  	# variable used below with bash indirect expansion
  	application_incoming_port="${APPLICATION}_port"
-+	port_closed_file="${PORT_CLOSED_FILE:-/tmp/portclosed}"
-+	port_closed_count_file="${PORT_CLOSED_COUNT_FILE:-/tmp/portclosed-count}"
-+	port_closed_threshold="${PORT_CLOSED_THRESHOLD:-3}"
++	local port_closed_file="${PORT_CLOSED_FILE:-/tmp/portclosed}"
++	local port_closed_count_file="${PORT_CLOSED_COUNT_FILE:-/tmp/portclosed-count}"
++	local port_closed_threshold="${PORT_CLOSED_THRESHOLD:-3}"
++	local failure_reason
++	local previous_state=""
++	local previous_count=0
++	local port_closed_count
++	local port_check_state
 +	[[ "${port_closed_threshold}" =~ ^[1-9][0-9]*$ ]] || port_closed_threshold=3
  
  	if [[ -z "${!application_incoming_port}" ]]; then
  		echo "[warn] ${APPLICATION} incoming port is not defined" ; return 1
-@@ -474,20 +482,60 @@ function check_incoming_port() {
+@@ -474,20 +493,58 @@ function check_incoming_port() {
  	if [[ -z "${external_ip}" ]]; then
  		echo "[warn] External IP address is not defined" ; return 2
  	fi
@@ -78,8 +117,8 @@ index a158fc6..566454e 100755
 +
 +	if [[ "${INCOMING_PORT_OPEN}" == "true" ]]; then
 +		rm -f "${port_closed_count_file}"
- 		return
- 	fi
++		return
++	fi
 +
 +	if [[ "${canyouseeme_port_closed}" == "true" && "${INCOMING_PORT_CLOSED}" == "true" ]]; then
 +		echo "[info] ${APPLICATION} incoming port reported closed by multiple checks, marking for reconfigure"
@@ -89,32 +128,30 @@ index a158fc6..566454e 100755
 +	fi
 +
 +	if [[ "${canyouseeme_port_closed}" == "true" || "${INCOMING_PORT_CLOSED}" == "true" ]]; then
-+		previous_state=""
-+		previous_count=0
-+		if [[ -f "${port_closed_count_file}" ]]; then
-+			read -r previous_state previous_count < "${port_closed_count_file}" || true
-+		fi
-+		[[ "${previous_count}" =~ ^[0-9]+$ ]] || previous_count=0
-+		if [[ "${previous_state}" == "${port_check_state}" ]]; then
-+			port_closed_count=$((previous_count + 1))
-+		else
-+			port_closed_count=1
-+		fi
-+		printf '%s %s\n' "${port_check_state}" "${port_closed_count}" > "${port_closed_count_file}"
-+
-+		if ((port_closed_count >= port_closed_threshold)); then
-+			echo "[info] ${APPLICATION} incoming port repeatedly reported closed, marking for reconfigure"
-+			rm -f "${port_closed_count_file}"
-+			touch "${port_closed_file}"
-+			return
-+		fi
-+
-+		echo "[warn] ${APPLICATION} incoming port reported closed by one check (${port_closed_count}/${port_closed_threshold}), keeping the current connection"
-+		return
++		failure_reason="reported closed by one check"
++	else
++		failure_reason="check was inconclusive"
 +	fi
 +
-+	rm -f "${port_closed_count_file}"
-+	echo "[warn] ${APPLICATION} incoming port check was inconclusive, keeping the current connection"
++	if [[ -f "${port_closed_count_file}" ]]; then
++		read -r previous_state previous_count < "${port_closed_count_file}" || true
++	fi
++	[[ "${previous_count}" =~ ^[0-9]+$ ]] || previous_count=0
++	if [[ "${previous_state}" == "${port_check_state}" ]]; then
++		port_closed_count=$((previous_count + 1))
++	else
++		port_closed_count=1
++	fi
++	printf '%s %s\n' "${port_check_state}" "${port_closed_count}" > "${port_closed_count_file}"
++
++	if ((port_closed_count >= port_closed_threshold)); then
++		echo "[info] ${APPLICATION} incoming port check failed repeatedly, marking for reconfigure"
++		rm -f "${port_closed_count_file}"
++		touch "${port_closed_file}"
+ 		return
+ 	fi
++
++	echo "[warn] ${APPLICATION} incoming port ${failure_reason} (${port_closed_count}/${port_closed_threshold}), keeping the current connection"
  }
  
  # this function reads in the contents of a temporary file which contains the current

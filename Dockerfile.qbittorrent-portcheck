@@ -1,4 +1,4 @@
-ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
+ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest@sha256:4f3d8fe34c64575142d1eced060c0d4cda80ad970378026d5a24a32ab157e9e4
 ARG QBITTORRENT_VERSION=5.2.3
 ARG QBITTORRENT_COMMIT=0b63c3d17373f6132ea211c9dcd4241284ccdfaf
 ARG LIBTORRENT_COMMIT=7d7fc38fac61177fa5e02148f791b2f65250b09d
@@ -15,7 +15,7 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
 COPY --chown=nobody:users packaging/libtorrent/PKGBUILD /tmp/libtorrent-package/PKGBUILD
 COPY --chown=nobody:users patches/libtorrent-openssl-dh.patch /tmp/libtorrent-package/libtorrent-openssl-dh.patch
 RUN cd /tmp/libtorrent-package && \
-    runuser -u nobody -- env LIBTORRENT_COMMIT="${LIBTORRENT_COMMIT}" makepkg --noconfirm --cleanbuild --clean
+    runuser -u nobody -- makepkg --noconfirm --cleanbuild --clean
 RUN test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = "${QBITTORRENT_VERSION}" && \
     pacman -U --noconfirm /tmp/libtorrent-package/libtorrent-rasterbar-*.pkg.tar.zst && \
     test "$(pacman -Q libtorrent-rasterbar)" = "libtorrent-rasterbar 2:2.0.13-1"
@@ -37,15 +37,16 @@ RUN git init /tmp/qbittorrent && \
     printf '2.0.13\n' > /tmp/libtorrent-version
 COPY patches/binhex-portcheck.patch /tmp/binhex-portcheck.patch
 COPY patches/binhex-wireguard-permissions.patch /tmp/binhex-wireguard-permissions.patch
-RUN mkdir -p /tmp/binhex/run/local /tmp/binhex/usr/bin && \
+RUN mkdir -p /tmp/binhex/run/local /tmp/binhex/usr/bin /tmp/binhex/root && \
     cp /usr/local/bin/tools.sh /tmp/binhex/run/local/tools.sh && \
     cp /usr/bin/init.sh /tmp/binhex/usr/bin/init.sh && \
+    cp /root/wireguard.sh /tmp/binhex/root/wireguard.sh && \
     patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch && \
     patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-wireguard-permissions.patch
 
 FROM ${UPSTREAM_IMAGE}
 
-ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
+ARG UPSTREAM_IMAGE
 ARG UPSTREAM_IMAGE_DIGEST=unknown
 ARG SOURCE_COMMIT=unknown
 ARG QBITTORRENT_VERSION
@@ -69,11 +70,13 @@ COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbitto
 COPY --from=qbittorrent-builder /tmp/libtorrent-version /usr/local/share/libtorrent-pinned-version
 COPY --from=qbittorrent-builder /tmp/binhex/run/local/tools.sh /usr/local/bin/tools.sh
 COPY --from=qbittorrent-builder /tmp/binhex/usr/bin/init.sh /usr/bin/init.sh
+COPY --from=qbittorrent-builder /tmp/binhex/root/wireguard.sh /root/wireguard.sh
 RUN pacman -U --noconfirm /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
     rm -f /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
-    chmod +x /usr/local/bin/tools.sh /usr/bin/init.sh && \
+    chmod +x /usr/local/bin/tools.sh /usr/bin/init.sh /root/wireguard.sh && \
     ! grep -Fq 'chmod -R 775 "/config/wireguard"' /usr/bin/init.sh && \
     grep -Fq 'find "/config/wireguard" -maxdepth 1 -type f -exec chmod 600 {} +' /usr/bin/init.sh && \
+    grep -Fq 'chmod 600 "${VPN_CONFIG}"' /root/wireguard.sh && \
     test "$(pacman -Q libtorrent-rasterbar)" = "libtorrent-rasterbar 2:2.0.13-1" && \
     readelf -Ws /usr/lib/libtorrent-rasterbar.so.2.0.13 | grep -q 'UND.*BN_mod_exp_mont_consttime' && \
     test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \

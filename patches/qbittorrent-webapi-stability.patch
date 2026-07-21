@@ -91,12 +91,13 @@ diff --git a/src/webui/webapplication.cpp b/src/webui/webapplication.cpp
 index 91d9c80fd..8f273d589 100644
 --- a/src/webui/webapplication.cpp
 +++ b/src/webui/webapplication.cpp
-@@ -732,7 +732,27 @@ void WebApplication::sessionInitialize()
+@@ -732,7 +732,29 @@ void WebApplication::sessionInitialize()
      {
          if (!validateBasicAuth(credentials))
              throw UnauthorizedHTTPError();
 -        sessionStart();
 +
++        // ponytail: cookie-less Basic auth has no stronger client ID; use an explicit token if the API adds one.
 +        const QString basicAuthClientId = clientId() + u'\n' + m_request.headers.value(u"user-agent"_s);
 +        const QString sessionId = m_basicAuthSessionIds.value(basicAuthClientId);
 +        m_currentSession = m_sessions.value(sessionId);
@@ -110,6 +111,7 @@ index 91d9c80fd..8f273d589 100644
 +        if (m_currentSession)
 +        {
 +            m_currentSession->updateTimestamp();
++            setSessionCookie();
 +        }
 +        else
 +        {
