@@ -2,15 +2,6 @@ name: build-qbittorrent-portcheck
 
 on:
   workflow_dispatch:
-    inputs:
-      upstream_image:
-        description: Upstream binhex image to extend
-        required: false
-        default: binhex/arch-qbittorrentvpn:latest
-      custom_image:
-        description: Custom image tag to publish
-        required: false
-        default: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
   push:
     branches:
       - master
@@ -18,13 +9,15 @@ on:
       - Dockerfile.qbittorrent-portcheck
       - patches/libtorrent-openssl-dh.patch
       - patches/qbittorrent-webapi-stability.patch
+      - patches/binhex-portcheck.patch
       - run/local/tools.sh
+      - tests/test-port-check.sh
       - .github/workflows/build-qbittorrent-portcheck.yml
   schedule:
     - cron: '17 4 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.custom_image || 'ghcr.io/tansien/qbittorrentvpn-portcheck:latest' }}
+  group: ${{ github.workflow }}-ghcr.io/tansien/qbittorrentvpn-portcheck:latest
   cancel-in-progress: true
 
 permissions:
@@ -34,33 +27,29 @@ permissions:
 env:
   DEFAULT_CUSTOM_IMAGE: ghcr.io/tansien/qbittorrentvpn-portcheck:latest
   DEFAULT_UPSTREAM_IMAGE: binhex/arch-qbittorrentvpn:latest
+  QBITTORRENT_VERSION: 5.2.3
+  QBITTORRENT_COMMIT: 0b63c3d17373f6132ea211c9dcd4241284ccdfaf
+  LIBTORRENT_COMMIT: 7d7fc38fac61177fa5e02148f791b2f65250b09d
+  ROLLBACK_IMAGE: ghcr.io/tansien/qbittorrentvpn-portcheck@sha256:10bda24ed3bcfa76d2fc95cdcd910e69686a87274de9f1a40b9b12dfa472f2ea
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test port-check decisions
+        run: tests/test-port-check.sh
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve image names
-        id: images
-        shell: bash
-        run: |
-          upstream_image="${{ github.event.inputs.upstream_image }}"
-          custom_image="${{ github.event.inputs.custom_image }}"
-          : "${upstream_image:=${DEFAULT_UPSTREAM_IMAGE}}"
-          : "${custom_image:=${DEFAULT_CUSTOM_IMAGE}}"
-          echo "upstream_image=${upstream_image}" >> "${GITHUB_OUTPUT}"
-          echo "custom_image=${custom_image}" >> "${GITHUB_OUTPUT}"
       - name: Check upstream digest
         id: upstream
         shell: bash
         run: |
-          manifest="$(docker buildx imagetools inspect "${{ steps.images.outputs.upstream_image }}" --format '{{json .Manifest}}')"
+          manifest="$(docker buildx imagetools inspect "${DEFAULT_UPSTREAM_IMAGE}" --format '{{json .Manifest}}')"
           upstream_digest="$(jq -er '
             if .manifests then
               [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")]
@@ -70,24 +59,29 @@ jobs:
             end
             | select(test("^sha256:[0-9a-f]{64}$"))
           ' <<< "${manifest}")"
-          upstream_reference="${{ steps.images.outputs.upstream_image }}"
+          upstream_reference="${DEFAULT_UPSTREAM_IMAGE}"
           upstream_reference="${upstream_reference%@*}@${upstream_digest}"
-          custom_image="${{ steps.images.outputs.custom_image }}"
-          custom_repository="${custom_image%:*}"
+          custom_repository="${DEFAULT_CUSTOM_IMAGE%:*}"
           immutable_image="${custom_repository}:git-${GITHUB_SHA}-upstream-${upstream_digest#sha256:}"
-          built_from_digest="$(docker buildx imagetools inspect "${{ steps.images.outputs.custom_image }}" --format '{{ index .Image.Config.Labels "io.tansien.upstream.digest" }}' 2>/dev/null || true)"
+          built_labels="$(docker buildx imagetools inspect "${DEFAULT_CUSTOM_IMAGE}" --format '{{json .Image.Config.Labels}}' 2>/dev/null || true)"
+          built_from_digest="$(jq -r '."io.tansien.upstream.digest" // empty' <<< "${built_labels}" 2>/dev/null || true)"
+          built_qbittorrent_commit="$(jq -r '."io.tansien.qbittorrent.commit" // empty' <<< "${built_labels}" 2>/dev/null || true)"
+          built_libtorrent_commit="$(jq -r '."io.tansien.libtorrent.commit" // empty' <<< "${built_labels}" 2>/dev/null || true)"
 
           echo "digest=${upstream_digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${upstream_reference}" >> "${GITHUB_OUTPUT}"
           echo "immutable_image=${immutable_image}" >> "${GITHUB_OUTPUT}"
 
-          if [[ "${{ github.event_name }}" == "schedule" && "${upstream_digest}" == "${built_from_digest}" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule"
+              && "${upstream_digest}" == "${built_from_digest}"
+              && "${QBITTORRENT_COMMIT}" == "${built_qbittorrent_commit}"
+              && "${LIBTORRENT_COMMIT}" == "${built_libtorrent_commit}" ]]; then
             echo "build=false" >> "${GITHUB_OUTPUT}"
             echo "Upstream unchanged (${upstream_digest}); skipping build."
           else
             echo "build=true" >> "${GITHUB_OUTPUT}"
           fi
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         if: steps.upstream.outputs.build == 'true'
         with:
           context: .
@@ -98,6 +92,12 @@ jobs:
           build-args: |
             UPSTREAM_IMAGE=${{ steps.upstream.outputs.reference }}
             UPSTREAM_IMAGE_DIGEST=${{ steps.upstream.outputs.digest }}
+            QBITTORRENT_VERSION=${{ env.QBITTORRENT_VERSION }}
+            QBITTORRENT_COMMIT=${{ env.QBITTORRENT_COMMIT }}
+            LIBTORRENT_COMMIT=${{ env.LIBTORRENT_COMMIT }}
           tags: |
-            ${{ steps.images.outputs.custom_image }}
+            ${{ env.DEFAULT_CUSTOM_IMAGE }}
             ${{ steps.upstream.outputs.immutable_image }}
+      - name: Record rollback image
+        run: |
+          printf 'Known-good rollback image: `%s`\n' "${ROLLBACK_IMAGE}" >> "${GITHUB_STEP_SUMMARY}"

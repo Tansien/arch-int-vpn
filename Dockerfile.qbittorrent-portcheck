@@ -1,15 +1,30 @@
 ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
+ARG QBITTORRENT_VERSION=5.2.3
+ARG QBITTORRENT_COMMIT=0b63c3d17373f6132ea211c9dcd4241284ccdfaf
+ARG LIBTORRENT_COMMIT=7d7fc38fac61177fa5e02148f791b2f65250b09d
 FROM ${UPSTREAM_IMAGE} AS qbittorrent-builder
+
+ARG QBITTORRENT_VERSION
+ARG QBITTORRENT_COMMIT
+ARG LIBTORRENT_COMMIT
 
 COPY patches/qbittorrent-webapi-stability.patch /tmp/qbittorrent-webapi-stability.patch
 COPY patches/libtorrent-openssl-dh.patch /tmp/libtorrent-openssl-dh.patch
+COPY patches/binhex-portcheck.patch /tmp/binhex-portcheck.patch
 
 RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
         "${archive_date}" > /etc/pacman.d/mirrorlist && \
     pacman -S --needed --noconfirm base-devel boost cmake git qt6-svg qt6-tools && \
-    git clone --branch v2.0.13 --depth 1 --recurse-submodules --shallow-submodules \
-        https://github.com/arvidn/libtorrent.git /tmp/libtorrent && \
+    mkdir -p /tmp/binhex/run/local && \
+    cp /usr/local/bin/tools.sh /tmp/binhex/run/local/tools.sh && \
+    patch --batch --forward -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch && \
+    git init /tmp/libtorrent && \
+    git -C /tmp/libtorrent remote add origin https://github.com/arvidn/libtorrent.git && \
+    git -C /tmp/libtorrent fetch --depth 1 origin "${LIBTORRENT_COMMIT}" && \
+    git -C /tmp/libtorrent checkout --detach "${LIBTORRENT_COMMIT}" && \
+    test "$(git -C /tmp/libtorrent rev-parse HEAD)" = "${LIBTORRENT_COMMIT}" && \
+    git -C /tmp/libtorrent submodule update --init --recursive --depth 1 && \
     git -C /tmp/libtorrent apply /tmp/libtorrent-openssl-dh.patch && \
     cmake -B /tmp/libtorrent-build -S /tmp/libtorrent \
         -DCMAKE_BUILD_TYPE=Release \
@@ -22,9 +37,12 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
     cmake --build /tmp/libtorrent-build --parallel 2 --target test_pe_crypto && \
     /tmp/libtorrent-build/test/test_pe_crypto && \
     cmake --install /tmp/libtorrent-build --strip && \
-    qbittorrent_version="$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" && \
-    git clone --branch "release-${qbittorrent_version}" --depth 1 \
-        https://github.com/qbittorrent/qBittorrent.git /tmp/qbittorrent && \
+    test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = "${QBITTORRENT_VERSION}" && \
+    git init /tmp/qbittorrent && \
+    git -C /tmp/qbittorrent remote add origin https://github.com/qbittorrent/qBittorrent.git && \
+    git -C /tmp/qbittorrent fetch --depth 1 origin "${QBITTORRENT_COMMIT}" && \
+    git -C /tmp/qbittorrent checkout --detach "${QBITTORRENT_COMMIT}" && \
+    test "$(git -C /tmp/qbittorrent rev-parse HEAD)" = "${QBITTORRENT_COMMIT}" && \
     git -C /tmp/qbittorrent apply /tmp/qbittorrent-webapi-stability.patch && \
     cmake -B /tmp/qbittorrent-build -S /tmp/qbittorrent \
         -DCMAKE_BUILD_TYPE=Release \
@@ -33,26 +51,32 @@ RUN archive_date="$(date -u -r /var/lib/pacman/sync/extra.db +%Y/%m/%d)" && \
         -DSYSTEMD=OFF && \
     cmake --build /tmp/qbittorrent-build --parallel 2 && \
     DESTDIR=/tmp/qbittorrent-install cmake --install /tmp/qbittorrent-build --strip && \
-    printf '%s\n' "${qbittorrent_version}" > /tmp/qbittorrent-version && \
+    printf '%s\n' "${QBITTORRENT_VERSION}" > /tmp/qbittorrent-version && \
     printf '2.0.13\n' > /tmp/libtorrent-version
 
 FROM ${UPSTREAM_IMAGE}
 
 ARG UPSTREAM_IMAGE=binhex/arch-qbittorrentvpn:latest
 ARG UPSTREAM_IMAGE_DIGEST=unknown
+ARG QBITTORRENT_VERSION
+ARG QBITTORRENT_COMMIT
+ARG LIBTORRENT_COMMIT
 
 LABEL org.opencontainers.image.source="https://github.com/Tansien/arch-int-vpn"
 LABEL io.tansien.upstream.image="${UPSTREAM_IMAGE}"
 LABEL io.tansien.upstream.digest="${UPSTREAM_IMAGE_DIGEST}"
-LABEL io.tansien.qbittorrent.patch="webapi-auth-worker-priority-and-bulk-pagination"
+LABEL io.tansien.qbittorrent.version="${QBITTORRENT_VERSION}"
+LABEL io.tansien.qbittorrent.commit="${QBITTORRENT_COMMIT}"
+LABEL io.tansien.qbittorrent.patch="webapi-auth-session-worker-priority-and-bulk-pagination"
 LABEL io.tansien.libtorrent.version="2.0.13"
+LABEL io.tansien.libtorrent.commit="${LIBTORRENT_COMMIT}"
 LABEL io.tansien.libtorrent.patch="openssl-constant-time-dh"
 
 COPY --from=qbittorrent-builder /tmp/qbittorrent-install/usr/bin/qbittorrent-nox /usr/bin/qbittorrent-nox
 COPY --from=qbittorrent-builder /usr/lib/libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0.13
 COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbittorrent-patched-version
 COPY --from=qbittorrent-builder /tmp/libtorrent-version /usr/local/share/libtorrent-pinned-version
-COPY run/local/tools.sh /usr/local/bin/tools.sh
+COPY --from=qbittorrent-builder /tmp/binhex/run/local/tools.sh /usr/local/bin/tools.sh
 RUN chmod +x /usr/local/bin/tools.sh && \
     ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so.2.0 && \
     ln -sfn libtorrent-rasterbar.so.2.0.13 /usr/lib/libtorrent-rasterbar.so && \
