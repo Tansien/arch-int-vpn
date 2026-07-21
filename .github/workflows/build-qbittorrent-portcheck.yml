@@ -11,6 +11,7 @@ on:
       - patches/libtorrent-openssl-dh.patch
       - patches/qbittorrent-webapi-stability.patch
       - patches/binhex-portcheck.patch
+      - patches/binhex-wireguard-permissions.patch
       - run/local/tools.sh
       - tests/test-port-check.sh
       - tests/test-webapi-basic-sessions.sh

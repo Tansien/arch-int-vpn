@@ -36,9 +36,12 @@ RUN git init /tmp/qbittorrent && \
     printf '%s\n' "${QBITTORRENT_VERSION}" > /tmp/qbittorrent-version && \
     printf '2.0.13\n' > /tmp/libtorrent-version
 COPY patches/binhex-portcheck.patch /tmp/binhex-portcheck.patch
-RUN mkdir -p /tmp/binhex/run/local && \
+COPY patches/binhex-wireguard-permissions.patch /tmp/binhex-wireguard-permissions.patch
+RUN mkdir -p /tmp/binhex/run/local /tmp/binhex/usr/bin && \
     cp /usr/local/bin/tools.sh /tmp/binhex/run/local/tools.sh && \
-    patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch
+    cp /usr/bin/init.sh /tmp/binhex/usr/bin/init.sh && \
+    patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-portcheck.patch && \
+    patch --batch --forward --fuzz=0 -p1 -d /tmp/binhex < /tmp/binhex-wireguard-permissions.patch
 
 FROM ${UPSTREAM_IMAGE}
 
@@ -65,9 +68,12 @@ COPY --from=qbittorrent-builder /tmp/libtorrent-package/libtorrent-rasterbar-*.p
 COPY --from=qbittorrent-builder /tmp/qbittorrent-version /usr/local/share/qbittorrent-patched-version
 COPY --from=qbittorrent-builder /tmp/libtorrent-version /usr/local/share/libtorrent-pinned-version
 COPY --from=qbittorrent-builder /tmp/binhex/run/local/tools.sh /usr/local/bin/tools.sh
+COPY --from=qbittorrent-builder /tmp/binhex/usr/bin/init.sh /usr/bin/init.sh
 RUN pacman -U --noconfirm /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
     rm -f /tmp/libtorrent-rasterbar-*.pkg.tar.zst && \
-    chmod +x /usr/local/bin/tools.sh && \
+    chmod +x /usr/local/bin/tools.sh /usr/bin/init.sh && \
+    ! grep -Fq 'chmod -R 775 "/config/wireguard"' /usr/bin/init.sh && \
+    grep -Fq 'find "/config/wireguard" -maxdepth 1 -type f -exec chmod 600 {} +' /usr/bin/init.sh && \
     test "$(pacman -Q libtorrent-rasterbar)" = "libtorrent-rasterbar 2:2.0.13-1" && \
     readelf -Ws /usr/lib/libtorrent-rasterbar.so.2.0.13 | grep -q 'UND.*BN_mod_exp_mont_consttime' && \
     test "$(qbittorrent-nox --version | awk '{sub(/^v/, "", $2); print $2}')" = \
