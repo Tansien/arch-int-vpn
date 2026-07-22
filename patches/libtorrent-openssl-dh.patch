@@ -135,7 +135,16 @@ index 01735e007..60a04dcf6 100644
  	std::array<char, 96> export_key(key_t const& k)
  	{
  		std::array<char, 96> ret;
-@@ -100,7 +165,7 @@ namespace libtorrent {
+@@ -92,15 +157,15 @@ namespace libtorrent {
+ 	// Set the prime P and the generator, generate local public key
+ 	dh_key_exchange::dh_key_exchange()
+ 	{
+-		aux::array<std::uint8_t, 96> random_key;
++		aux::array<std::uint8_t, 20> random_key;
+ 		aux::random_bytes({reinterpret_cast<char*>(random_key.data())
+ 			, static_cast<std::ptrdiff_t>(random_key.size())});
+ 
+ 		// create local key (random)
  		mp::import_bits(m_dh_local_secret, random_key.begin(), random_key.end());
  
  		// key = (2 ^ secret) % prime
